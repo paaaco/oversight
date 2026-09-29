@@ -88,3 +88,28 @@ func TestDeriveAndSort(t *testing.T) {
 		t.Fatalf("derived statuses wrong: %s %s", rows[4].Status, rows[5].Status)
 	}
 }
+
+func TestNoteRoundTripAndDelete(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	_ = SaveSession(&Session{SessionID: "abc", Status: StatusWorking})
+	if err := SaveNote(&Note{SessionID: "abc", Note: "fix POS refunds"}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := LoadNote("abc")
+	if err != nil || n.Note != "fix POS refunds" || n.UpdatedAt.IsZero() {
+		t.Fatalf("load: %v %+v", err, n)
+	}
+	if list, _ := ListSessions(); len(list) != 1 {
+		t.Fatalf("note file must not count as a session: %d", len(list))
+	}
+	DeleteNote("abc")
+	if _, err := LoadNote("abc"); err == nil {
+		t.Fatal("note should be gone")
+	}
+	DeleteNote("abc") // idempotent
+	_ = SaveNote(&Note{SessionID: "abc", Note: "again"})
+	Delete("abc")
+	if _, err := LoadNote("abc"); err == nil {
+		t.Fatal("Delete should remove the note too")
+	}
+}

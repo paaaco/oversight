@@ -15,7 +15,7 @@ tab.
  ◐ working   salonized/pos-refunds          now   tab 4
    Running the refund service tests.
  ─────────────────────────────────────────────────────────────
- ↑↓ select   enter jump   / filter   r recap   x drop   q quit
+ ↑↓ select   enter jump   / filter   n note   r recap   x drop   q quit
 ```
 
 Your workflow stays the same: one `claude` per tab, started by hand. The
@@ -47,7 +47,8 @@ One binary, three roles, sharing state through JSON files in
   prints and never exits non-zero; errors go to `~/.oversight/log`.
 - `oversight recap <id>` is spawned detached on every `Stop`. It sends the
   last 40 user/assistant turns to Haiku and writes back one line.
-- `oversight dash` watches the directory with fsnotify and redraws.
+- `oversight dash` watches the directory with fsnotify and redraws. It owns
+  `<id>.note.json`, a hand-written label that replaces the recap line.
 
 Statuses `working`, `approval` and `waiting` are stored. `idle` (waiting for
 over 30 minutes, tune with `--idle-after`) and `stale` (process gone) are
@@ -82,7 +83,8 @@ off with `--usage=false`.
 |-----|--------|
 | `↑` `↓` / `k` `j` | Move selection |
 | `Enter` | Focus that session's iTerm tab |
-| `/` | Filter by repo, branch or recap text |
+| `/` | Filter by repo, branch, note or recap text |
+| `n` | Write a note for the selected session; it shows instead of the recap. Save it empty to clear |
 | `r` | Force a recap for the selected session |
 | `x` | Delete the selected entry |
 | `q` | Quit |

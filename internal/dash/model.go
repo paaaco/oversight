@@ -59,6 +59,8 @@ type model struct {
 	selected   string
 	filter     string
 	filtering  bool
+	note       string // note editor buffer
+	noting     bool
 	tabs       map[string]iterm.Location
 	tabsErr    error
 	staleSince map[string]time.Time
@@ -247,7 +249,8 @@ func (m *model) reload() {
 		}
 		m.lastStatus[s.SessionID] = status
 		recap, _ := registry.LoadRecap(s.SessionID)
-		rows = append(rows, registry.Row{Session: s, Recap: recap, Status: status, Alive: alive})
+		note, _ := registry.LoadNote(s.SessionID)
+		rows = append(rows, registry.Row{Session: s, Recap: recap, Note: note, Status: status, Alive: alive})
 	}
 	registry.Sort(rows)
 	m.all = rows
@@ -261,7 +264,7 @@ func (m *model) applyFilter() {
 	} else {
 		m.rows = nil
 		for _, r := range m.all {
-			hay := strings.ToLower(r.Session.Title + " " + repoBranch(r.Session) + " " + recapLine(r))
+			hay := strings.ToLower(r.Session.Title + " " + repoBranch(r.Session) + " " + noteText(r) + " " + recapLine(r))
 			if strings.Contains(hay, q) {
 				m.rows = append(m.rows, r)
 			}
@@ -306,6 +309,23 @@ func (m *model) move(delta int) {
 	}
 	m.selected = m.rows[i].Session.SessionID
 	m.scrollToSelection()
+}
+
+// saveNote writes the editor buffer for the selected row. Empty clears it.
+func (m *model) saveNote() {
+	r := m.current()
+	if r == nil {
+		return
+	}
+	text := strings.TrimSpace(m.note)
+	m.note = ""
+	if text == "" {
+		registry.DeleteNote(r.Session.SessionID)
+	} else if err := registry.SaveNote(&registry.Note{SessionID: r.Session.SessionID, Note: text}); err != nil {
+		m.flash = "note failed: " + err.Error()
+		logx.Errorf("dash: note: %v", err)
+	}
+	m.reload()
 }
 
 // rowLines is how many terminal lines one row takes in View.
@@ -400,6 +420,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.noting {
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.noting, m.note = false, ""
+		case tea.KeyEnter:
+			m.noting = false
+			m.saveNote()
+		case tea.KeyBackspace:
+			if r := []rune(m.note); len(r) > 0 {
+				m.note = string(r[:len(r)-1])
+			}
+		case tea.KeyRunes, tea.KeySpace:
+			m.note += string(msg.Runes)
+			if msg.Type == tea.KeySpace {
+				m.note += " "
+			}
+		}
+		return m, nil
+	}
 	if m.filtering {
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -431,6 +470,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(1)
 	case "/":
 		m.filtering = true
+	case "n":
+		if r := m.current(); r != nil {
+			m.noting = true
+			m.note = noteText(*r)
+		}
 	case "esc":
 		if m.filter != "" {
 			m.filter = ""
@@ -554,12 +598,14 @@ func (m *model) View() string {
 	}
 	b.WriteString(styleRule.Render(rule) + "\n")
 	switch {
+	case m.noting:
+		b.WriteString(" n " + m.note + "▏  " + styleDim.Render("enter save   esc cancel"))
 	case m.filtering:
 		b.WriteString(" / " + m.filter + "▏  " + styleDim.Render("enter done   esc clear"))
 	case m.flash != "":
 		b.WriteString(" " + m.flash)
 	default:
-		foot := " ↑↓ select   enter jump   / filter   r recap   x drop   q quit"
+		foot := " ↑↓ select   enter jump   / filter   n note   r recap   x drop   q quit"
 		if m.filter != "" {
 			foot += styleDim.Render("   [filter: " + m.filter + "]")
 		}
@@ -633,6 +679,9 @@ func (m *model) renderRow(r registry.Row, selected bool, w int) string {
 		since(r.Session.StatusSince),
 		m.tabLabel(r.Session))
 	line2 := "   " + styleDim.Render(clip(recapLine(r), max(w-4, 20)))
+	if n := noteText(r); n != "" {
+		line2 = "   " + clip("✎ "+n, max(w-4, 20))
+	}
 	if selected {
 		line1 = styleSel.Render(padRight(line1, w))
 	}
@@ -649,7 +698,11 @@ func (m *model) plain() string {
 			name = r.Session.Title + " · " + name
 		}
 		fmt.Fprintf(&b, "%-9s %-40s %5s  %s\n", r.Status, name, since(r.Session.StatusSince), m.tabLabel(r.Session))
-		fmt.Fprintf(&b, "          %s\n", recapLine(r))
+		line2 := recapLine(r)
+		if n := noteText(r); n != "" {
+			line2 = "✎ " + n
+		}
+		fmt.Fprintf(&b, "          %s\n", line2)
 	}
 	return b.String()
 }
@@ -714,6 +767,14 @@ func repoBranch(s *registry.Session) string {
 		return s.Repo
 	}
 	return s.Repo + "/" + s.Branch
+}
+
+// noteText is the hand-written note for a row, or "".
+func noteText(r registry.Row) string {
+	if r.Note != nil {
+		return r.Note.Note
+	}
+	return ""
 }
 
 func recapLine(r registry.Row) string {

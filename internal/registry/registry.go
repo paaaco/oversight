@@ -1,7 +1,8 @@
 // Package registry stores one JSON file pair per live Claude Code session.
 //
 // <session_id>.json is owned by the hook handler, <session_id>.recap.json by
-// the recap worker. Every write is atomic (temp file + rename).
+// the recap worker and <session_id>.note.json by the dashboard. Every write
+// is atomic (temp file + rename).
 package registry
 
 import (
@@ -60,6 +61,13 @@ type Recap struct {
 	TranscriptLines int       `json:"transcript_lines"`
 }
 
+// Note is a hand-written label for a session, set from the dashboard.
+type Note struct {
+	SessionID string    `json:"session_id"`
+	Note      string    `json:"note"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // SetStatus changes the status and resets status_since only on a real change.
 func (s *Session) SetStatus(status string, now time.Time) {
 	if s.Status != status {
@@ -79,6 +87,7 @@ func Dir() string {
 func SessionPath(id string) string { return filepath.Join(Dir(), id+".json") }
 func RecapPath(id string) string   { return filepath.Join(Dir(), id+".recap.json") }
 func LockPath(id string) string    { return filepath.Join(Dir(), id+".recap.lock") }
+func NotePath(id string) string    { return filepath.Join(Dir(), id+".note.json") }
 
 // WriteAtomic writes v as JSON to path via a temp file and rename.
 func WriteAtomic(path string, v any) error {
@@ -131,9 +140,34 @@ func LoadRecap(id string) (*Recap, error) {
 
 func SaveRecap(r *Recap) error { return WriteAtomic(RecapPath(r.SessionID), r) }
 
+func LoadNote(id string) (*Note, error) {
+	data, err := os.ReadFile(NotePath(id))
+	if err != nil {
+		return nil, err
+	}
+	var n Note
+	if err := json.Unmarshal(data, &n); err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+// SaveNote stamps UpdatedAt and writes the note file.
+func SaveNote(n *Note) error {
+	n.UpdatedAt = time.Now().UTC()
+	return WriteAtomic(NotePath(n.SessionID), n)
+}
+
+// DeleteNote removes the note file. A missing file is fine.
+func DeleteNote(id string) {
+	if err := os.Remove(NotePath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logx.Errorf("delete note %s: %v", id, err)
+	}
+}
+
 // Delete removes every file belonging to a session. Missing files are fine.
 func Delete(id string) {
-	for _, p := range []string{SessionPath(id), RecapPath(id), LockPath(id)} {
+	for _, p := range []string{SessionPath(id), RecapPath(id), LockPath(id), NotePath(id)} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logx.Errorf("delete %s: %v", p, err)
 		}
@@ -149,7 +183,7 @@ func ListSessions() ([]*Session, error) {
 	var out []*Session
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".recap.json") {
+		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".recap.json") || strings.HasSuffix(name, ".note.json") {
 			continue
 		}
 		id := strings.TrimSuffix(name, ".json")
@@ -184,6 +218,7 @@ func DeleteOthersWithITerm(itermID, keepID string) {
 type Row struct {
 	Session *Session
 	Recap   *Recap
+	Note    *Note
 	Status  string // stored status, or idle / stale when derived
 	Alive   bool
 }

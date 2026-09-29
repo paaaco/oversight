@@ -207,3 +207,70 @@ func TestViewScrollsToKeepSelectionVisible(t *testing.T) {
 func hasUpHint(v string) bool {
 	return regexp.MustCompile(`↑ \d+ more`).MatchString(v)
 }
+
+func TestNoteEditing(t *testing.T) {
+	m := seed(t)
+	m.selected = "a" // has an AI recap
+	typeKeys := func(s string) {
+		for _, r := range s {
+			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if !m.noting {
+		t.Fatal("n should open the note editor")
+	}
+	if v := m.View(); !strings.Contains(v, "enter save") {
+		t.Fatalf("editor footer missing:\n%s", v)
+	}
+	typeKeys("fix POS")
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	typeKeys("refunds")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v := m.View()
+	if m.noting || !strings.Contains(v, "✎ fix POS refunds") || strings.Contains(v, "Running the refund") {
+		t.Fatalf("note should replace the recap on line 2:\n%s", v)
+	}
+	if n, err := registry.LoadNote("a"); err != nil || n.Note != "fix POS refunds" {
+		t.Fatalf("note not persisted: %v %+v", err, n)
+	}
+	if !strings.Contains(m.plain(), "✎ fix POS refunds") {
+		t.Fatal("plain output should show the note")
+	}
+
+	// Reopening prefills; esc leaves the saved note alone.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.note != "fix POS refunds" {
+		t.Fatalf("editor should prefill: %q", m.note)
+	}
+	typeKeys(" nope")
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if v := m.View(); m.noting || strings.Contains(v, "nope") || !strings.Contains(v, "✎ fix POS refunds") {
+		t.Fatalf("esc should cancel:\n%s", v)
+	}
+
+	// Filter matches the note.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	typeKeys("pos refunds")
+	if len(m.rows) != 1 || m.rows[0].Session.SessionID != "a" {
+		t.Fatalf("filter on note: %d rows", len(m.rows))
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Saving an empty note clears it and the recap comes back.
+	m.selected = "a"
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	for range "fix POS refunds" {
+		m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if v := m.View(); strings.Contains(v, "✎") || !strings.Contains(v, "Running the refund service tests.") {
+		t.Fatalf("empty note should fall back to the recap:\n%s", v)
+	}
+	if _, err := registry.LoadNote("a"); err == nil {
+		t.Fatal("empty note should delete the file")
+	}
+	if !strings.Contains(m.View(), "n note") {
+		t.Fatal("footer should advertise the n key")
+	}
+}
