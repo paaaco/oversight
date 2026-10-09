@@ -32,19 +32,49 @@ func TestSessionRoundTripAndDelete(t *testing.T) {
 	}
 }
 
-func TestDeleteOthersWithITerm(t *testing.T) {
+func TestDeleteOthersWithPane(t *testing.T) {
 	t.Setenv("OVERSIGHT_DIR", t.TempDir())
-	_ = SaveSession(&Session{SessionID: "old", ITermSessionID: "w0t1p0:X"})
-	_ = SaveSession(&Session{SessionID: "other", ITermSessionID: "w0t2p0:Y"})
-	_ = SaveSession(&Session{SessionID: "new", ITermSessionID: "w0t1p0:X"})
-	DeleteOthersWithITerm("w0t1p0:X", "new")
+	_ = SaveSession(&Session{SessionID: "old-iterm", ITermSessionID: "w0t1p0:X"})
+	_ = SaveSession(&Session{SessionID: "old-tmux", TmuxPane: "%12"})
+	_ = SaveSession(&Session{SessionID: "other", ITermSessionID: "w0t2p0:Y", TmuxPane: "%3"})
+	_ = SaveSession(&Session{SessionID: "new", ITermSessionID: "w0t1p0:X", TmuxPane: "%12"})
+	DeleteOthersWithPane("w0t1p0:X", "%12", "new")
 	list, _ := ListSessions()
 	ids := map[string]bool{}
 	for _, s := range list {
 		ids[s.SessionID] = true
 	}
-	if ids["old"] || !ids["new"] || !ids["other"] {
+	if ids["old-iterm"] || ids["old-tmux"] || !ids["new"] || !ids["other"] {
 		t.Fatalf("unexpected survivors: %v", ids)
+	}
+}
+
+func TestDeleteOthersWithPaneIgnoresEmptyIDs(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	_ = SaveSession(&Session{SessionID: "a"}) // no pane ids at all
+	_ = SaveSession(&Session{SessionID: "b"})
+	DeleteOthersWithPane("", "", "b")
+	list, _ := ListSessions()
+	if len(list) != 2 {
+		t.Fatalf("empty ids must not match anything, got %d sessions", len(list))
+	}
+}
+
+func TestAgentNameDefaultsToClaude(t *testing.T) {
+	if (&Session{}).AgentName() != AgentClaude {
+		t.Fatal("empty agent should read as claude")
+	}
+	if (&Session{Agent: AgentOpenCode}).AgentName() != "opencode" {
+		t.Fatal("explicit agent lost")
+	}
+}
+
+func TestTmuxPaneAndAgentRoundTrip(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	_ = SaveSession(&Session{SessionID: "x", TmuxPane: "%7", Agent: AgentOpenCode})
+	got, err := LoadSession("x")
+	if err != nil || got.TmuxPane != "%7" || got.Agent != AgentOpenCode {
+		t.Fatalf("round trip: %+v %v", got, err)
 	}
 }
 

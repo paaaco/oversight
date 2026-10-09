@@ -32,6 +32,12 @@ const (
 	StatusStale = "stale"
 )
 
+// Agents whose sessions the registry tracks.
+const (
+	AgentClaude   = "claude"
+	AgentOpenCode = "opencode"
+)
+
 // IdleAfter is how long a waiting session sits before it is shown as idle.
 var IdleAfter = 30 * time.Minute
 
@@ -39,6 +45,8 @@ type Session struct {
 	Version        int       `json:"version"`
 	SessionID      string    `json:"session_id"`
 	ITermSessionID string    `json:"iterm_session_id"`
+	TmuxPane       string    `json:"tmux_pane,omitempty"` // $TMUX_PANE, e.g. "%12"
+	Agent          string    `json:"agent,omitempty"`     // claude (default) or opencode
 	PID            int       `json:"pid"`
 	CWD            string    `json:"cwd"`
 	Repo           string    `json:"repo"`
@@ -75,6 +83,15 @@ func (s *Session) SetStatus(status string, now time.Time) {
 		s.StatusSince = now
 	}
 	s.UpdatedAt = now
+}
+
+// AgentName returns the agent, defaulting to claude for files written before
+// the field existed.
+func (s *Session) AgentName() string {
+	if s.Agent == "" {
+		return AgentClaude
+	}
+	return s.Agent
 }
 
 // Dir returns the sessions directory, creating it if needed.
@@ -197,10 +214,11 @@ func ListSessions() ([]*Session, error) {
 	return out, nil
 }
 
-// DeleteOthersWithITerm removes sessions sharing an iTerm pane, except keepID.
-// This covers /clear and --resume in the same tab, which mint a new session_id.
-func DeleteOthersWithITerm(itermID, keepID string) {
-	if itermID == "" {
+// DeleteOthersWithPane removes sessions sharing a terminal pane with the new
+// one, except keepID. Either id matches; empty ids match nothing. This covers
+// /clear and --resume in the same pane, and swapping one agent for another.
+func DeleteOthersWithPane(itermID, tmuxPane, keepID string) {
+	if itermID == "" && tmuxPane == "" {
 		return
 	}
 	sessions, err := ListSessions()
@@ -208,7 +226,12 @@ func DeleteOthersWithITerm(itermID, keepID string) {
 		return
 	}
 	for _, s := range sessions {
-		if s.SessionID != keepID && s.ITermSessionID == itermID {
+		if s.SessionID == keepID {
+			continue
+		}
+		sameITerm := itermID != "" && s.ITermSessionID == itermID
+		sameTmux := tmuxPane != "" && s.TmuxPane == tmuxPane
+		if sameITerm || sameTmux {
 			Delete(s.SessionID)
 		}
 	}

@@ -181,7 +181,7 @@ func sessionStart(in Input, env Env, now time.Time) error {
 	if err := registry.SaveSession(s); err != nil {
 		return err
 	}
-	registry.DeleteOthersWithITerm(s.ITermSessionID, s.SessionID)
+	registry.DeleteOthersWithPane(s.ITermSessionID, s.TmuxPane, s.SessionID)
 	return nil
 }
 
