@@ -1,5 +1,6 @@
 // Package usage reads the subscription rate-limit view that Claude Code's
-// /usage shows, using the OAuth token Claude Code keeps in the macOS Keychain.
+// /usage shows, using the OAuth token Claude Code keeps in the macOS Keychain
+// or, elsewhere, in ~/.claude/.credentials.json.
 //
 // The endpoint is internal to Claude Code and undocumented. Everything here
 // degrades to "unavailable" rather than failing the dashboard, and the token
@@ -13,7 +14,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -25,8 +29,9 @@ const (
 	betaHeader   = "oauth-2025-04-20"
 )
 
-// ErrNoToken means no usable Claude Code login was found in the Keychain.
-var ErrNoToken = errors.New("no Claude Code login in keychain")
+// ErrNoToken means no usable Claude Code login was found in the Keychain or
+// the credentials file.
+var ErrNoToken = errors.New("no Claude Code login found")
 
 // ErrUnauthorized means the token was rejected; Claude Code refreshes it the
 // next time a session runs.
@@ -38,13 +43,38 @@ type Token struct {
 	ExpiresAt time.Time
 }
 
-// ReadToken loads the token from the Keychain via the security CLI.
+// ReadToken loads the token: the Keychain on macOS, then the credentials file.
 func ReadToken(ctx context.Context) (Token, error) {
-	out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainItem, "-w").Output()
+	if runtime.GOOS == "darwin" {
+		out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainItem, "-w").Output()
+		if err == nil {
+			if tok, err := ParseCredentials(out); err == nil {
+				return tok, nil
+			}
+		}
+	}
+	return ReadTokenFile(CredentialsPath())
+}
+
+// CredentialsPath is where Claude Code stores its login outside the Keychain.
+func CredentialsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", ".credentials.json")
+}
+
+// ReadTokenFile parses a credentials file. Missing or unreadable is ErrNoToken.
+func ReadTokenFile(path string) (Token, error) {
+	if path == "" {
+		return Token{}, ErrNoToken
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Token{}, ErrNoToken
 	}
-	return ParseCredentials(out)
+	return ParseCredentials(raw)
 }
 
 // ParseCredentials extracts the token from the keychain item's JSON.

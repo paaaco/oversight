@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -150,11 +151,14 @@ func Default(ctx context.Context, system, body string) (string, error) {
 	return ViaClaudeCLI(ctx, system, body)
 }
 
-// APIKey reads ANTHROPIC_API_KEY from the environment, then the macOS Keychain
-// (generic password with service name ANTHROPIC_API_KEY).
+// APIKey reads ANTHROPIC_API_KEY from the environment, then, on macOS, the
+// Keychain (generic password with service name ANTHROPIC_API_KEY).
 func APIKey() string {
 	if k := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); k != "" {
 		return k
+	}
+	if runtime.GOOS != "darwin" {
+		return ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

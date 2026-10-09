@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -68,5 +70,29 @@ func TestBarAndReset(t *testing.T) {
 	}
 	if got := ResetLabel(time.Time{}, now); got != "" {
 		t.Fatalf("zero: %q", got)
+	}
+}
+
+func TestReadTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".credentials.json")
+	if _, err := ReadTokenFile(p); err != ErrNoToken {
+		t.Fatalf("missing file: want ErrNoToken, got %v", err)
+	}
+	_ = os.WriteFile(p, []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-oat-x","expiresAt":1800000000000}}`), 0o600)
+	tok, err := ReadTokenFile(p)
+	if err != nil || tok.Access != "sk-ant-oat-x" || tok.ExpiresAt.UnixMilli() != 1800000000000 {
+		t.Fatalf("got %+v %v", tok, err)
+	}
+	_ = os.WriteFile(p, []byte(`not json`), 0o600)
+	if _, err := ReadTokenFile(p); err != ErrNoToken {
+		t.Fatalf("garbage file: want ErrNoToken, got %v", err)
+	}
+}
+
+func TestCredentialsPathUnderHome(t *testing.T) {
+	t.Setenv("HOME", "/tmp/fakehome")
+	if got := CredentialsPath(); got != "/tmp/fakehome/.claude/.credentials.json" {
+		t.Fatal(got)
 	}
 }
