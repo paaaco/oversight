@@ -94,9 +94,7 @@ func Once(opts Options) error {
 	if opts.IdleAfter > 0 {
 		registry.IdleAfter = opts.IdleAfter
 	}
-	m := newModel(opts)
-	m.reload()
-	m.width = 100
+	m := onceModel(opts)
 	if opts.Usage {
 		if msg, ok := m.fetchUsage()().(usageMsg); ok {
 			m.usage, m.usageErr = msg.snap, msg.err
@@ -105,6 +103,19 @@ func Once(opts Options) error {
 	}
 	fmt.Print(m.plain())
 	return nil
+}
+
+// onceModel builds the model for --once: sessions loaded, host locations fetched.
+func onceModel(opts Options) *model {
+	m := newModel(opts)
+	m.reload()
+	m.width = 100
+	if opts.Host != nil {
+		if msg, ok := fetchTabs(opts.Host)().(tabsMsg); ok && msg.err == nil {
+			m.tabs = msg.tabs
+		}
+	}
+	return m
 }
 
 func newModel(opts Options) *model {

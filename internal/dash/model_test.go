@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -323,9 +324,22 @@ func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
 type fakeHost struct {
 	name     string
 	locs     map[string]host.Location
+	mu       sync.Mutex
 	focused  []string
 	focusErr error
 	notes    []string
+}
+
+func (f *fakeHost) noteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.notes)
+}
+
+func (f *fakeHost) notesCopy() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.notes...)
 }
 
 func (f *fakeHost) Name() string { return f.name }
@@ -337,10 +351,16 @@ func (f *fakeHost) Key(s *registry.Session) string {
 }
 func (f *fakeHost) Locations(context.Context) (map[string]host.Location, error) { return f.locs, nil }
 func (f *fakeHost) Focus(_ context.Context, key string) error {
+	f.mu.Lock()
 	f.focused = append(f.focused, key)
+	f.mu.Unlock()
 	return f.focusErr
 }
-func (f *fakeHost) Notify(title, body string) { f.notes = append(f.notes, title+": "+body) }
+func (f *fakeHost) Notify(title, body string) {
+	f.mu.Lock()
+	f.notes = append(f.notes, title+": "+body)
+	f.mu.Unlock()
+}
 
 func seedTmux(t *testing.T, h host.Host) *model {
 	t.Helper()
@@ -453,11 +473,11 @@ func TestApprovalNotifiesThroughHost(t *testing.T) {
 	_ = registry.SaveSession(s)
 	m.reload()
 	deadline := time.Now().Add(time.Second)
-	for len(h.notes) == 0 && time.Now().Before(deadline) {
+	for h.noteCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(h.notes) != 1 || !strings.Contains(h.notes[0], "api/main") {
-		t.Fatalf("notification: %v", h.notes)
+	if notes := h.notesCopy(); len(notes) != 1 || !strings.Contains(notes[0], "api/main") {
+		t.Fatalf("notification: %v", notes)
 	}
 }
 
@@ -467,5 +487,14 @@ func TestOncePlainShowsAgentAndLabel(t *testing.T) {
 	out := m.plain()
 	if !strings.Contains(out, "opencode") || !strings.Contains(out, "dev:3.0") {
 		t.Fatalf("plain output: %s", out)
+	}
+}
+
+func TestOnceFetchesHostLabels(t *testing.T) {
+	h := &fakeHost{name: "tmux", locs: map[string]host.Location{"%7": {Label: "dev:3.0"}}}
+	seedTmux(t, h) // seeds the registry; the model it returns is not used
+	m := onceModel(Options{OwnTmuxPane: "%0", Host: h})
+	if out := m.plain(); !strings.Contains(out, "dev:3.0") {
+		t.Fatalf("once should fetch host locations:\n%s", out)
 	}
 }
