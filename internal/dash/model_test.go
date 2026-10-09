@@ -274,3 +274,42 @@ func TestNoteEditing(t *testing.T) {
 		t.Fatal("footer should advertise the n key")
 	}
 }
+
+func TestDividersBetweenRowsOnly(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	now := time.Now()
+	for i := 0; i < 12; i++ {
+		id := string(rune('a' + i))
+		_ = registry.SaveSession(&registry.Session{SessionID: id, Repo: "repo-" + id, PID: pidSelf(0), Status: registry.StatusWaiting, StatusSince: now.Add(-time.Duration(i) * time.Minute)})
+	}
+	m := newModel(Options{Dividers: true})
+	m.width, m.height = 80, 13 // 4 fixed lines + 9 for rows = 3 rows of 3 lines
+	m.reload()
+
+	v := m.View()
+	lines := strings.Split(v, "\n")
+	if len(lines) != 13 {
+		t.Fatalf("view has %d lines, want 13:\n%s", len(lines), v)
+	}
+	if !strings.Contains(v, "repo-c") || strings.Contains(v, "repo-d") {
+		t.Fatalf("three rows should fit with dividers:\n%s", v)
+	}
+	// Layout: title, rule, a, a, ─, b, b, ─, c, c, pad, rule, footer.
+	isRule := func(l string) bool { return strings.Contains(l, "──") }
+	if !isRule(lines[4]) || !isRule(lines[7]) {
+		t.Fatalf("want dividers after rows a and b:\n%s", v)
+	}
+	if isRule(lines[10]) {
+		t.Fatalf("no divider after the last visible row:\n%s", v)
+	}
+	if !strings.Contains(v, "↓ 9 more") {
+		t.Fatalf("want overflow hint for the 9 hidden rows:\n%s", v)
+	}
+
+	m.selected = "l"
+	m.scrollToSelection()
+	v = m.View()
+	if !strings.Contains(v, "repo-l") || len(strings.Split(v, "\n")) != 13 {
+		t.Fatalf("scrolling with dividers should keep the height stable:\n%s", v)
+	}
+}

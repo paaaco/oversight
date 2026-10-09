@@ -51,8 +51,9 @@ func main() {
 		notify := fs.Bool("notify", true, "send a macOS notification when a session needs approval")
 		idle := fs.Duration("idle-after", 30*time.Minute, "show waiting sessions as idle after this long")
 		showUsage := fs.Bool("usage", true, "show the subscription rate-limit line (reads the Claude Code login from the keychain)")
+		dividers := fs.Bool("dividers", true, "draw a rule between session rows")
 		_ = fs.Parse(args)
-		opts := dash.Options{Notify: *notify, OwnITerm: os.Getenv("ITERM_SESSION_ID"), IdleAfter: *idle, Usage: *showUsage}
+		opts := dash.Options{Notify: *notify, OwnITerm: os.Getenv("ITERM_SESSION_ID"), IdleAfter: *idle, Usage: *showUsage, Dividers: *dividers}
 		var err error
 		if *once {
 			err = dash.Once(opts)
@@ -108,7 +109,7 @@ func main() {
 func usage() {
 	fmt.Println(`usage:
   oversight                      run the dashboard
-  oversight dash [--once] [--notify=false] [--usage=false] [--idle-after=30m]
+  oversight dash [--once] [--notify=false] [--usage=false] [--idle-after=30m] [--dividers=false]
   oversight install [--settings PATH] [--command CMD]
   oversight hook <Event>         (called by Claude Code)
   oversight recap <session-id> [--force]`)

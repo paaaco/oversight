@@ -95,6 +95,7 @@ off with `--usage=false`.
 - `dash --notify=false` turns off the macOS notification on `approval`.
 - `dash --usage=false` hides the subscription usage line.
 - `dash --idle-after 1h` changes the idle threshold.
+- `dash --dividers=false` removes the rule drawn between session rows.
 - `install --settings PATH --command CMD` for non-default locations.
 
 ## Session names and colors

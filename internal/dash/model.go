@@ -32,6 +32,7 @@ type Options struct {
 	OwnITerm  string // this dashboard's $ITERM_SESSION_ID, hidden from the list
 	IdleAfter time.Duration
 	Usage     bool // show the subscription rate-limit line
+	Dividers  bool // draw a rule between rows, table style
 }
 
 type (
@@ -328,8 +329,14 @@ func (m *model) saveNote() {
 	m.reload()
 }
 
-// rowLines is how many terminal lines one row takes in View.
-const rowLines = 2
+// rowLines is how many terminal lines one row takes in View: two of text,
+// plus the divider drawn under it when dividers are on.
+func (m *model) rowLines() int {
+	if m.opts.Dividers {
+		return 3
+	}
+	return 2
+}
 
 // fixedLines counts the header, rules and footer around the row area.
 func (m *model) fixedLines() int {
@@ -345,7 +352,7 @@ func (m *model) pageRows() int {
 	if m.height <= 0 {
 		return 0
 	}
-	n := (m.height - m.fixedLines()) / rowLines
+	n := (m.height - m.fixedLines()) / m.rowLines()
 	if n < 1 {
 		n = 1
 	}
@@ -568,10 +575,15 @@ func (m *model) View() string {
 		end = m.offset + per
 	}
 	used := 0
-	for _, r := range m.rows[m.offset:end] {
+	for i, r := range m.rows[m.offset:end] {
 		sel := r.Session.SessionID == m.selected
 		b.WriteString(m.renderRow(r, sel, w))
-		used += rowLines
+		used += 2
+		// Divider between rows only; the last visible row is closed by the bottom rule.
+		if m.opts.Dividers && m.offset+i+1 < end {
+			b.WriteString(styleRule.Render(" "+strings.Repeat("─", max(w-2, 10))) + "\n")
+			used++
+		}
 	}
 	if len(m.rows) == 0 {
 		used = 1
