@@ -1,18 +1,20 @@
 # oversight
 
-A dashboard for iTerm tab 1 that lists every running Claude Code session on
-the machine, its status, and a one-line recap. Enter jumps to that session's
-tab.
+A dashboard that lists every running Claude Code and OpenCode session on the
+machine, its status, and a one-line recap. Enter jumps to that session's
+iTerm tab or tmux pane.
 
 ```
- CLAUDE SESSIONS                                     3 active
+ SESSIONS                                            3 active
  5h ▓▓░░░░░░░░ 17%  resets 17:29    7d ▓▓░░░░░░░░ 19%  resets thu
  ─────────────────────────────────────────────────────────────
- ! approval  api/fiskaly-retry              5m    tab 6
+ ! approval  claude    api/fiskaly-retry         5m   dev:2.1
    Asking permission to run the DB seed script.
- ● waiting   receipts · salonized/fiscal-receipts  2m  tab 3
-   Rounding fix done, wants you to confirm the migration.
- ◐ working   salonized/pos-refunds          now   tab 4
+ ─────────────────────────────────────────────────────────────
+ ● waiting   opencode  web/feat                  2m   dev:3.0
+   > fix the nav
+ ─────────────────────────────────────────────────────────────
+ ◐ working   claude    salonized/pos-refunds     now  dev:1.0
    Running the refund service tests.
  ─────────────────────────────────────────────────────────────
  ↑↓ select   enter jump   / filter   n note   r recap   x drop   q quit
@@ -35,6 +37,44 @@ installed do not show up until they are restarted.
 
 The first `Enter` triggers a macOS Automation prompt so the terminal can
 control iTerm2. Allow it once.
+
+## Linux and tmux
+
+```sh
+go build -o ~/.local/bin/oversight .
+oversight install       # Claude hooks, plus the OpenCode plugin if ~/.config/opencode exists
+tmux new-window -n oversight oversight
+```
+
+Inside tmux the dashboard labels rows `session:window.pane` and Enter runs
+`switch-client`, `select-window` and `select-pane` on that pane, so it works
+across tmux sessions. Started outside tmux (and outside iTerm) there is no
+way to jump, so rows carry no label and Enter says so.
+
+Notifications on `approval` use `notify-send` when it is installed and are
+skipped otherwise. There is no Automation prompt on Linux.
+
+On macOS, running the dashboard inside tmux (even tmux inside iTerm) uses the
+tmux path; running it in a plain iTerm tab uses the iTerm path. Hooks record
+both ids, so the same session file works for either.
+
+## OpenCode
+
+`oversight install` writes `~/.config/opencode/plugins/oversight.ts` when
+that config directory exists (`--opencode-dir DIR` to force a location,
+`--opencode=false` to skip). The plugin calls
+`oversight hook <Event> --agent opencode --pid N` on `session.created`,
+user `message.updated`, `permission.asked`, `permission.replied`,
+`session.idle` and `session.deleted`. Sub-sessions are ignored.
+
+OpenCode rows show the last prompt and your note. There is no recap, no
+`/rename` and no `/color` for them, because those come from the Claude Code
+transcript. `permission.asked` also fires for auto-approved permissions, so
+an OpenCode row can flash `approval` for a moment before `permission.replied`
+flips it back.
+
+The plugin fills `prompt` on `UserPromptSubmit` only when the event carries
+the text; on versions where it does not, the row keeps its previous prompt.
 
 ## How it works
 
@@ -70,7 +110,8 @@ The line under the header is the same rate-limit view as `/usage` inside
 Claude Code: the 5-hour window, the 7-day window, and any per-model weekly
 window, each with a reset time. It comes from the OAuth login Claude Code
 keeps in the macOS Keychain (`Claude Code-credentials`); the first read
-triggers a Keychain "allow access" prompt for `oversight`. The token is
+triggers a Keychain "allow access" prompt for `oversight`. On Linux the same token is read from `~/.claude/.credentials.json`, with no
+prompt. The token is
 only held in memory and polled once a minute.
 
 The endpoint is internal to Claude Code and undocumented, so the line reads
@@ -82,7 +123,7 @@ off with `--usage=false`.
 | Key | Action |
 |-----|--------|
 | `↑` `↓` / `k` `j` | Move selection |
-| `Enter` | Focus that session's iTerm tab |
+| `Enter` | Focus that session's iTerm tab or tmux pane |
 | `/` | Filter by repo, branch, note or recap text |
 | `n` | Write a note for the selected session; it shows instead of the recap. Save it empty to clear |
 | `r` | Force a recap for the selected session |
@@ -97,6 +138,7 @@ off with `--usage=false`.
 - `dash --idle-after 1h` changes the idle threshold.
 - `dash --dividers=false` removes the rule drawn between session rows.
 - `install --settings PATH --command CMD` for non-default locations.
+- `install --opencode=false` skips the OpenCode plugin; `--opencode-dir DIR` writes it under a non-default config dir.
 
 ## Session names and colors
 
@@ -108,8 +150,11 @@ by one turn.
 
 ## Notes
 
-- Claude started outside iTerm (VS Code terminal) is listed, but Enter says
-  "not an iTerm session".
+- Claude started outside both iTerm and tmux (VS Code terminal) is listed,
+  but Enter says `not an iTerm session` or `not a tmux session`.
+- A session that starts in a pane another session already occupies (same
+  iTerm id or same tmux pane) replaces the older entry, so swapping Claude
+  for OpenCode in a pane does not leave a ghost row.
 - `/clear` and `--resume` mint a new session id; the older entry for the same
   pane is removed on `SessionStart`.
 - The transcript JSONL format is internal to Claude Code. The parser skips
