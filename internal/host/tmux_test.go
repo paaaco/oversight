@@ -89,6 +89,17 @@ func TestTmuxFocusMissingPane(t *testing.T) {
 	}
 }
 
+func TestTmuxFocusEmptyKeyIsMissing(t *testing.T) {
+	// The listing ends in a newline; its empty last line must not match "".
+	f := &fakeRunner{replies: map[string]string{"list-panes": listing}}
+	if err := NewTmux(f.run).Focus(context.Background(), ""); !errors.Is(err, ErrMissing) {
+		t.Fatalf("want ErrMissing for an empty key, got %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("empty key should not reach tmux: %v", f.calls)
+	}
+}
+
 func TestTmuxFocusIgnoresSwitchClientFailure(t *testing.T) {
 	// Dashboard not inside tmux: switch-client fails, the rest still runs.
 	f := &fakeRunner{replies: map[string]string{"list-panes": listing}, errs: map[string]error{"switch-client": errors.New("no current client")}}

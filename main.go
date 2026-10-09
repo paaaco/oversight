@@ -52,7 +52,7 @@ func main() {
 		once := fs.Bool("once", false, "print the session list and exit")
 		notify := fs.Bool("notify", true, "send a desktop notification when a session needs approval")
 		idle := fs.Duration("idle-after", 30*time.Minute, "show waiting sessions as idle after this long")
-		showUsage := fs.Bool("usage", true, "show the subscription rate-limit line (reads the Claude Code login from the keychain)")
+		showUsage := fs.Bool("usage", true, "show the subscription rate-limit line (reads the Claude Code login from the keychain or ~/.claude/.credentials.json)")
 		dividers := fs.Bool("dividers", true, "draw a rule between session rows")
 		_ = fs.Parse(args)
 		opts := dash.Options{

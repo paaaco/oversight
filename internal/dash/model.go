@@ -3,7 +3,9 @@ package dash
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -111,8 +113,12 @@ func onceModel(opts Options) *model {
 	m.reload()
 	m.width = 100
 	if opts.Host != nil {
-		if msg, ok := fetchTabs(opts.Host)().(tabsMsg); ok && msg.err == nil {
-			m.tabs = msg.tabs
+		if msg, ok := fetchTabs(opts.Host)().(tabsMsg); ok {
+			if msg.err != nil {
+				fmt.Fprintf(os.Stderr, "oversight: %s unreachable: %v\n", opts.Host.Name(), msg.err)
+			} else {
+				m.tabs = msg.tabs
+			}
 		}
 	}
 	return m
@@ -426,7 +432,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tabsMsg:
 		m.tabs, m.tabsErr = msg.tabs, msg.err
 	case focusMsg:
-		if msg.err == host.ErrMissing {
+		if errors.Is(msg.err, host.ErrMissing) {
 			m.forceStale[msg.id] = true
 			m.flash = "pane is gone, marked stale"
 			m.reload()
@@ -772,7 +778,18 @@ func (m *model) tabLabel(s *registry.Session) string {
 	if !ok {
 		return ""
 	}
-	return clip(loc.Label, 12)
+	return locLabel(h.Name(), loc, 12)
+}
+
+// locLabel fits a location label into n columns. tmux labels keep their
+// ":window.pane" suffix and clip the session name instead.
+func locLabel(hostName string, loc host.Location, n int) string {
+	suffix := fmt.Sprintf(":%d.%d", loc.Window, loc.Tab)
+	name, ok := strings.CutSuffix(loc.Label, suffix)
+	if hostName != "tmux" || !ok || len(suffix) >= n {
+		return clip(loc.Label, n)
+	}
+	return clip(name, n-len(suffix)) + suffix
 }
 
 // sessionColors maps /color names to terminal colors. Unknown names get no color.

@@ -77,6 +77,9 @@ func parsePanes(out string) map[string]Location {
 // not itself inside tmux; that is fine, the other two still move the client
 // attached to the target session.
 func (h tmuxHost) Focus(ctx context.Context, key string) error {
+	if key == "" {
+		return ErrMissing
+	}
 	out, err := h.run(ctx, "list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {
 		return err

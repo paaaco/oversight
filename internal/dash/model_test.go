@@ -2,6 +2,10 @@ package dash
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -327,6 +331,7 @@ type fakeHost struct {
 	mu       sync.Mutex
 	focused  []string
 	focusErr error
+	locsErr  error
 	notes    []string
 }
 
@@ -349,7 +354,9 @@ func (f *fakeHost) Key(s *registry.Session) string {
 	}
 	return s.ITermSessionID
 }
-func (f *fakeHost) Locations(context.Context) (map[string]host.Location, error) { return f.locs, nil }
+func (f *fakeHost) Locations(context.Context) (map[string]host.Location, error) {
+	return f.locs, f.locsErr
+}
 func (f *fakeHost) Focus(_ context.Context, key string) error {
 	f.mu.Lock()
 	f.focused = append(f.focused, key)
@@ -451,6 +458,57 @@ func TestEnterFocusesThroughHost(t *testing.T) {
 	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil || m.flash != "not a tmux session" {
 		t.Fatalf("iterm-only row under tmux host: cmd=%v flash=%q", cmd, m.flash)
+	}
+}
+
+func TestTmuxLabelKeepsWindowAndPane(t *testing.T) {
+	h := &fakeHost{name: "tmux", locs: map[string]host.Location{
+		"%12": {Window: 2, Tab: 1, Label: "salonized-backend:2.1"},
+		"%7":  {Window: 3, Tab: 0, Label: "web:3.0"},
+	}}
+	m := seedTmux(t, h)
+	if got := m.tabLabel(&registry.Session{TmuxPane: "%12"}); got != "saloniz…:2.1" {
+		t.Fatalf("long session name should be clipped, not the pane suffix: %q", got)
+	}
+	if got := m.tabLabel(&registry.Session{TmuxPane: "%7"}); got != "web:3.0" {
+		t.Fatalf("short label changed: %q", got)
+	}
+}
+
+func TestITermLabelPlainClip(t *testing.T) {
+	m := seed(t)
+	m.tabs["AAA"] = host.Location{Window: 2, Tab: 10, Label: "w2 tab 10"}
+	if got := m.tabLabel(&registry.Session{ITermSessionID: "w0t1p0:AAA"}); got != "w2 tab 10" {
+		t.Fatalf("iTerm label: %q", got)
+	}
+}
+
+func TestEnterWrappedMissingPaneMarksStale(t *testing.T) {
+	h := &fakeHost{name: "tmux", focusErr: fmt.Errorf("focus %%12: %w", host.ErrMissing)}
+	m := seedTmux(t, h)
+	m.selected = "c"
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(cmd())
+	if m.flash != "pane is gone, marked stale" {
+		t.Fatalf("wrapped ErrMissing not recognised: flash %q", m.flash)
+	}
+}
+
+func TestOnceReportsUnreachableHost(t *testing.T) {
+	h := &fakeHost{name: "tmux", locsErr: errors.New("no server running")}
+	seedTmux(t, h)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	onceModel(Options{OwnTmuxPane: "%0", Host: h})
+	os.Stderr = orig
+	w.Close()
+	out, _ := io.ReadAll(r)
+	if got := string(out); got != "oversight: tmux unreachable: no server running\n" {
+		t.Fatalf("stderr: %q", got)
 	}
 }
 
