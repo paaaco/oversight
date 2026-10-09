@@ -1,6 +1,7 @@
 package dash
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/paaaco/oversight/internal/iterm"
+	"github.com/paaaco/oversight/internal/host"
 	"github.com/paaaco/oversight/internal/registry"
 	"github.com/paaaco/oversight/internal/usage"
 )
@@ -25,9 +26,9 @@ func seed(t *testing.T) *model {
 	_ = registry.SaveSession(&registry.Session{SessionID: "dead", Repo: "old", PID: 999999999, Status: registry.StatusWaiting, StatusSince: now})
 	_ = registry.SaveSession(&registry.Session{SessionID: "self", Repo: "dash", ITermSessionID: "w0t0p0:ME", PID: pidSelf(me), Status: registry.StatusWaiting, StatusSince: now})
 	_ = registry.SaveRecap(&registry.Recap{SessionID: "a", Recap: "Running the refund service tests."})
-	m := newModel(Options{OwnITerm: "w0t0p0:ME"})
+	m := newModel(Options{OwnITerm: "w0t0p0:ME", Host: host.ITerm()})
 	m.width, m.height = 80, 24
-	m.tabs = map[string]iterm.Location{"AAA": {Window: 1, Tab: 4}, "BBB": {Window: 1, Tab: 6}}
+	m.tabs = map[string]host.Location{"AAA": {Window: 1, Tab: 4, Label: "tab 4"}, "BBB": {Window: 1, Tab: 6, Label: "tab 6"}}
 	m.reload()
 	return m
 }
@@ -41,7 +42,7 @@ func TestViewAndSelection(t *testing.T) {
 		t.Fatalf("approval row should be first and selected: %s / %s", m.rows[0].Session.SessionID, m.selected)
 	}
 	v := m.View()
-	for _, want := range []string{"CLAUDE SESSIONS", "2 active", "api/fiskaly-retry", "tab 6", "refunds fix", "· salonized/pos-refunds", "> seed the db", "Running the refund service tests.", "stale", "enter jump"} {
+	for _, want := range []string{"SESSIONS", "2 active", "api/fiskaly-retry", "tab 6", "refunds fix", "· salonized/pos-refunds", "> seed the db", "Running the refund service tests.", "stale", "enter jump"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("view missing %q:\n%s", want, v)
 		}
@@ -84,7 +85,7 @@ func TestViewAndSelection(t *testing.T) {
 func TestOncePlain(t *testing.T) {
 	m := seed(t)
 	out := m.plain()
-	if !strings.HasPrefix(out, "3 session(s)") || !strings.Contains(out, "approval  api/fiskaly-retry") || !strings.Contains(out, "refunds fix · salonized/pos-refunds") {
+	if !strings.HasPrefix(out, "3 session(s)") || !strings.Contains(out, "approval  claude   api/fiskaly-retry") || !strings.Contains(out, "refunds fix · salonized/pos-refunds") {
 		t.Fatalf("plain:\n%s", out)
 	}
 }
@@ -311,5 +312,160 @@ func TestDividersBetweenRowsOnly(t *testing.T) {
 	v = m.View()
 	if !strings.Contains(v, "repo-l") || len(strings.Split(v, "\n")) != 13 {
 		t.Fatalf("scrolling with dividers should keep the height stable:\n%s", v)
+	}
+}
+
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+
+// fakeHost is a scriptable Host for dashboard tests.
+type fakeHost struct {
+	name     string
+	locs     map[string]host.Location
+	focused  []string
+	focusErr error
+	notes    []string
+}
+
+func (f *fakeHost) Name() string { return f.name }
+func (f *fakeHost) Key(s *registry.Session) string {
+	if f.name == "tmux" {
+		return s.TmuxPane
+	}
+	return s.ITermSessionID
+}
+func (f *fakeHost) Locations(context.Context) (map[string]host.Location, error) { return f.locs, nil }
+func (f *fakeHost) Focus(_ context.Context, key string) error {
+	f.focused = append(f.focused, key)
+	return f.focusErr
+}
+func (f *fakeHost) Notify(title, body string) { f.notes = append(f.notes, title+": "+body) }
+
+func seedTmux(t *testing.T, h host.Host) *model {
+	t.Helper()
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	now := time.Now()
+	_ = registry.SaveSession(&registry.Session{SessionID: "c", Repo: "api", Branch: "main", TmuxPane: "%12", Agent: registry.AgentClaude, PID: pidSelf(0), Status: registry.StatusWorking, StatusSince: now})
+	_ = registry.SaveSession(&registry.Session{SessionID: "o", Repo: "web", Branch: "feat", TmuxPane: "%7", Agent: registry.AgentOpenCode, PID: pidSelf(0), Status: registry.StatusWaiting, StatusSince: now.Add(-time.Minute), LastPrompt: "fix the nav"})
+	_ = registry.SaveSession(&registry.Session{SessionID: "legacy", Repo: "old", ITermSessionID: "w0t1p0:ZZZ", PID: pidSelf(0), Status: registry.StatusWaiting, StatusSince: now.Add(-2 * time.Minute)})
+	_ = registry.SaveSession(&registry.Session{SessionID: "self", Repo: "dash", TmuxPane: "%0", PID: pidSelf(0), Status: registry.StatusWaiting, StatusSince: now})
+	m := newModel(Options{OwnTmuxPane: "%0", Host: h})
+	m.width, m.height = 90, 24
+	if h != nil {
+		m.tabs, _ = h.Locations(context.Background())
+	}
+	m.reload()
+	return m
+}
+
+func TestTmuxHostLabelsAndAgentTags(t *testing.T) {
+	h := &fakeHost{name: "tmux", locs: map[string]host.Location{"%12": {Label: "dev:2.1"}, "%7": {Label: "dev:3.0"}}}
+	m := seedTmux(t, h)
+	if len(m.rows) != 3 {
+		t.Fatalf("own tmux pane should be hidden: %d rows", len(m.rows))
+	}
+	v := stripANSI(m.View())
+	if !strings.Contains(v, " SESSIONS") {
+		t.Fatalf("header should read SESSIONS:\n%s", v)
+	}
+	if !strings.Contains(v, "dev:2.1") || !strings.Contains(v, "dev:3.0") {
+		t.Fatalf("tmux labels missing:\n%s", v)
+	}
+	if !strings.Contains(v, "opencode") || !strings.Contains(v, "claude") {
+		t.Fatalf("agent tags missing:\n%s", v)
+	}
+	if !strings.Contains(v, "no tmux") {
+		t.Fatalf("iTerm-only row should say no tmux under the tmux host:\n%s", v)
+	}
+}
+
+func TestFilterMatchesAgent(t *testing.T) {
+	m := seedTmux(t, &fakeHost{name: "tmux"})
+	m.filter = "opencode"
+	m.applyFilter()
+	if len(m.rows) != 1 || m.rows[0].Session.SessionID != "o" {
+		t.Fatalf("filter by agent: %+v", m.rows)
+	}
+}
+
+func TestEnterFocusesThroughHost(t *testing.T) {
+	h := &fakeHost{name: "tmux", locs: map[string]host.Location{"%7": {Label: "dev:3.0"}}}
+	m := seedTmux(t, h)
+	m.selected = "o"
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter should return a focus command")
+	}
+	msg := cmd()
+	m.Update(msg)
+	if len(h.focused) != 1 || h.focused[0] != "%7" {
+		t.Fatalf("focused %v", h.focused)
+	}
+	if m.flash != "" {
+		t.Fatalf("unexpected flash %q", m.flash)
+	}
+
+	m.selected = "legacy"
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.flash != "not a tmux session" {
+		t.Fatalf("iterm-only row under tmux host: cmd=%v flash=%q", cmd, m.flash)
+	}
+}
+
+func TestEnterMissingPaneMarksStale(t *testing.T) {
+	h := &fakeHost{name: "tmux", focusErr: host.ErrMissing}
+	m := seedTmux(t, h)
+	m.selected = "c"
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(cmd())
+	if m.flash != "pane is gone, marked stale" {
+		t.Fatalf("flash %q", m.flash)
+	}
+	if r := m.current(); r == nil || r.Status != registry.StatusStale {
+		t.Fatalf("row should be stale: %+v", r)
+	}
+}
+
+func TestNoHost(t *testing.T) {
+	m := seedTmux(t, nil)
+	v := stripANSI(m.View())
+	if strings.Contains(v, "no tmux") || strings.Contains(v, "no iterm") {
+		t.Fatalf("without a host rows should carry no placeholder:\n%s", v)
+	}
+	m.selected = "c"
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.flash != "no terminal host" {
+		t.Fatalf("enter without host: cmd=%v flash=%q", cmd, m.flash)
+	}
+	if msg := fetchTabs(nil)(); msg.(tabsMsg).err != nil {
+		t.Fatal("fetchTabs with nil host must not error")
+	}
+}
+
+func TestApprovalNotifiesThroughHost(t *testing.T) {
+	h := &fakeHost{name: "tmux"}
+	m := seedTmux(t, h)
+	m.opts.Notify = true
+	// First reload seeded lastStatus; now flip "c" to approval.
+	s, _ := registry.LoadSession("c")
+	s.SetStatus(registry.StatusApproval, time.Now())
+	_ = registry.SaveSession(s)
+	m.reload()
+	deadline := time.Now().Add(time.Second)
+	for len(h.notes) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(h.notes) != 1 || !strings.Contains(h.notes[0], "api/main") {
+		t.Fatalf("notification: %v", h.notes)
+	}
+}
+
+func TestOncePlainShowsAgentAndLabel(t *testing.T) {
+	h := &fakeHost{name: "tmux", locs: map[string]host.Location{"%7": {Label: "dev:3.0"}}}
+	m := seedTmux(t, h)
+	out := m.plain()
+	if !strings.Contains(out, "opencode") || !strings.Contains(out, "dev:3.0") {
+		t.Fatalf("plain output: %s", out)
 	}
 }

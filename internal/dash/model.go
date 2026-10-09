@@ -12,7 +12,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/paaaco/oversight/internal/hooks"
-	"github.com/paaaco/oversight/internal/iterm"
+	"github.com/paaaco/oversight/internal/host"
 	"github.com/paaaco/oversight/internal/logx"
 	"github.com/paaaco/oversight/internal/procs"
 	"github.com/paaaco/oversight/internal/registry"
@@ -28,18 +28,20 @@ const (
 
 // Options configure the dashboard.
 type Options struct {
-	Notify    bool
-	OwnITerm  string // this dashboard's $ITERM_SESSION_ID, hidden from the list
-	IdleAfter time.Duration
-	Usage     bool // show the subscription rate-limit line
-	Dividers  bool // draw a rule between rows, table style
+	Notify      bool
+	OwnITerm    string    // this dashboard's $ITERM_SESSION_ID, hidden from the list
+	OwnTmuxPane string    // this dashboard's $TMUX_PANE, hidden from the list
+	Host        host.Host // terminal backend; nil means labels and Enter are unavailable
+	IdleAfter   time.Duration
+	Usage       bool // show the subscription rate-limit line
+	Dividers    bool // draw a rule between rows, table style
 }
 
 type (
 	registryMsg struct{}
 	tickMsg     time.Time
 	tabsMsg     struct {
-		tabs map[string]iterm.Location
+		tabs map[string]host.Location
 		err  error
 	}
 	focusMsg struct {
@@ -62,7 +64,7 @@ type model struct {
 	filtering  bool
 	note       string // note editor buffer
 	noting     bool
-	tabs       map[string]iterm.Location
+	tabs       map[string]host.Location
 	tabsErr    error
 	staleSince map[string]time.Time
 	forceStale map[string]bool
@@ -118,7 +120,7 @@ func newModel(opts Options) *model {
 func (m *model) Init() tea.Cmd {
 	m.reload()
 	go m.watch()
-	cmds := []tea.Cmd{m.waitChange(), tick(), fetchTabs()}
+	cmds := []tea.Cmd{m.waitChange(), tick(), fetchTabs(m.opts.Host)}
 	if m.opts.Usage {
 		cmds = append(cmds, m.fetchUsage())
 	}
@@ -162,11 +164,14 @@ func tick() tea.Cmd {
 	return tea.Tick(tickEvery, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func fetchTabs() tea.Cmd {
+func fetchTabs(h host.Host) tea.Cmd {
 	return func() tea.Msg {
+		if h == nil {
+			return tabsMsg{}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		tabs, err := iterm.Tabs(ctx)
+		tabs, err := h.Locations(ctx)
 		return tabsMsg{tabs: tabs, err: err}
 	}
 }
@@ -231,6 +236,9 @@ func (m *model) reload() {
 		if m.opts.OwnITerm != "" && s.ITermSessionID == m.opts.OwnITerm {
 			continue
 		}
+		if m.opts.OwnTmuxPane != "" && s.TmuxPane == m.opts.OwnTmuxPane {
+			continue
+		}
 		alive := procs.Alive(s.PID) && !m.forceStale[s.SessionID]
 		status := registry.Derive(s, alive, now)
 		if status == registry.StatusStale {
@@ -245,8 +253,8 @@ func (m *model) reload() {
 		} else {
 			delete(m.staleSince, s.SessionID)
 		}
-		if m.opts.Notify && status == registry.StatusApproval && m.lastStatus[s.SessionID] != registry.StatusApproval && m.lastStatus[s.SessionID] != "" {
-			go iterm.Notify("Claude needs approval", repoBranch(s))
+		if m.opts.Notify && m.opts.Host != nil && status == registry.StatusApproval && m.lastStatus[s.SessionID] != registry.StatusApproval && m.lastStatus[s.SessionID] != "" {
+			go m.opts.Host.Notify(agentTitle(s)+" needs approval", repoBranch(s))
 		}
 		m.lastStatus[s.SessionID] = status
 		recap, _ := registry.LoadRecap(s.SessionID)
@@ -265,7 +273,7 @@ func (m *model) applyFilter() {
 	} else {
 		m.rows = nil
 		for _, r := range m.all {
-			hay := strings.ToLower(r.Session.Title + " " + repoBranch(r.Session) + " " + noteText(r) + " " + recapLine(r))
+			hay := strings.ToLower(r.Session.AgentName() + " " + r.Session.Title + " " + repoBranch(r.Session) + " " + noteText(r) + " " + recapLine(r))
 			if strings.Contains(hay, q) {
 				m.rows = append(m.rows, r)
 			}
@@ -393,11 +401,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.waitChange()
 	case tickMsg:
 		m.reload()
-		return m, tea.Batch(tick(), fetchTabs())
+		return m, tea.Batch(tick(), fetchTabs(m.opts.Host))
 	case tabsMsg:
 		m.tabs, m.tabsErr = msg.tabs, msg.err
 	case focusMsg:
-		if msg.err == iterm.ErrMissing {
+		if msg.err == host.ErrMissing {
 			m.forceStale[msg.id] = true
 			m.flash = "pane is gone, marked stale"
 			m.reload()
@@ -489,15 +497,25 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if r := m.current(); r != nil {
-			if r.Session.ITermSessionID == "" {
-				m.flash = "not an iTerm session"
+			h := m.opts.Host
+			if h == nil {
+				m.flash = "no terminal host"
 				return m, nil
 			}
-			id, uuid := r.Session.SessionID, iterm.UUID(r.Session.ITermSessionID)
+			key := h.Key(r.Session)
+			if key == "" {
+				if h.Name() == "iterm" {
+					m.flash = "not an iTerm session"
+				} else {
+					m.flash = "not a " + h.Name() + " session"
+				}
+				return m, nil
+			}
+			id := r.Session.SessionID
 			return m, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 				defer cancel()
-				return focusMsg{id: id, err: iterm.Focus(ctx, uuid)}
+				return focusMsg{id: id, err: h.Focus(ctx, key)}
 			}
 		}
 	case "r":
@@ -550,7 +568,7 @@ func (m *model) View() string {
 			active++
 		}
 	}
-	head := " CLAUDE SESSIONS"
+	head := " SESSIONS"
 	count := fmt.Sprintf("%d active ", active)
 	pad := w - lipgloss.Width(head) - lipgloss.Width(count)
 	if pad < 1 {
@@ -621,8 +639,8 @@ func (m *model) View() string {
 		if m.filter != "" {
 			foot += styleDim.Render("   [filter: " + m.filter + "]")
 		}
-		if m.tabsErr != nil {
-			foot += styleDim.Render("   (iTerm unreachable)")
+		if m.tabsErr != nil && m.opts.Host != nil {
+			foot += styleDim.Render("   (" + m.opts.Host.Name() + " unreachable)")
 		}
 		b.WriteString(foot)
 	}
@@ -676,17 +694,18 @@ func usageStyle(l usage.Limit) lipgloss.Style {
 
 func (m *model) renderRow(r registry.Row, selected bool, w int) string {
 	st := styleStatus[r.Status]
-	// " ! approval  " + name + "  5m  w1 tab 10": the name gets whatever is left.
-	nameW := w - 1 - 2 - 10 - 1 - 5 - 2 - 10
+	// " ! approval  opencode  " + name + "  5m  dev:2.1": the name gets whatever is left.
+	nameW := w - 1 - 2 - 10 - 9 - 1 - 5 - 2 - 12
 	if nameW < 20 {
 		nameW = 20
 	}
 	if nameW > 60 {
 		nameW = 60
 	}
-	line1 := fmt.Sprintf(" %s %-9s %s %5s  %s",
+	line1 := fmt.Sprintf(" %s %-9s %s %s %5s  %s",
 		st.Render(glyph[r.Status]),
 		st.Render(fmt.Sprintf("%-9s", r.Status)),
+		styleDim.Render(fmt.Sprintf("%-8s", r.Session.AgentName())),
 		nameColumn(r.Session, nameW),
 		since(r.Session.StatusSince),
 		m.tabLabel(r.Session))
@@ -709,7 +728,7 @@ func (m *model) plain() string {
 		if r.Session.Title != "" {
 			name = r.Session.Title + " · " + name
 		}
-		fmt.Fprintf(&b, "%-9s %-40s %5s  %s\n", r.Status, name, since(r.Session.StatusSince), m.tabLabel(r.Session))
+		fmt.Fprintf(&b, "%-9s %-8s %-40s %5s  %s\n", r.Status, r.Session.AgentName(), name, since(r.Session.StatusSince), m.tabLabel(r.Session))
 		line2 := recapLine(r)
 		if n := noteText(r); n != "" {
 			line2 = "✎ " + n
@@ -720,17 +739,19 @@ func (m *model) plain() string {
 }
 
 func (m *model) tabLabel(s *registry.Session) string {
-	if s.ITermSessionID == "" {
-		return styleDim.Render("no iterm")
+	h := m.opts.Host
+	if h == nil {
+		return ""
 	}
-	loc, ok := m.tabs[iterm.UUID(s.ITermSessionID)]
+	key := h.Key(s)
+	if key == "" {
+		return styleDim.Render("no " + h.Name())
+	}
+	loc, ok := m.tabs[key]
 	if !ok {
 		return ""
 	}
-	if loc.Window > 1 {
-		return fmt.Sprintf("w%d tab %d", loc.Window, loc.Tab)
-	}
-	return fmt.Sprintf("tab %d", loc.Tab)
+	return clip(loc.Label, 12)
 }
 
 // sessionColors maps /color names to terminal colors. Unknown names get no color.
@@ -772,6 +793,16 @@ func nameColumn(s *registry.Session, width int) string {
 		return st.Render(title) + styleDim.Render(padRight(" · "+clip(rb, rest-3), rest))
 	}
 	return st.Render(padRight(title, width))
+}
+
+// agentTitle is the capitalised agent name for notifications.
+func agentTitle(s *registry.Session) string {
+	switch s.AgentName() {
+	case registry.AgentOpenCode:
+		return "OpenCode"
+	default:
+		return "Claude"
+	}
 }
 
 func repoBranch(s *registry.Session) string {

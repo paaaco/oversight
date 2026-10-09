@@ -12,10 +12,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/paaaco/oversight/internal/dash"
 	"github.com/paaaco/oversight/internal/hooks"
+	"github.com/paaaco/oversight/internal/host"
 	"github.com/paaaco/oversight/internal/install"
 	"github.com/paaaco/oversight/internal/recap"
 )
@@ -48,12 +50,20 @@ func main() {
 	case "dash":
 		fs := flag.NewFlagSet("dash", flag.ExitOnError)
 		once := fs.Bool("once", false, "print the session list and exit")
-		notify := fs.Bool("notify", true, "send a macOS notification when a session needs approval")
+		notify := fs.Bool("notify", true, "send a desktop notification when a session needs approval")
 		idle := fs.Duration("idle-after", 30*time.Minute, "show waiting sessions as idle after this long")
 		showUsage := fs.Bool("usage", true, "show the subscription rate-limit line (reads the Claude Code login from the keychain)")
 		dividers := fs.Bool("dividers", true, "draw a rule between session rows")
 		_ = fs.Parse(args)
-		opts := dash.Options{Notify: *notify, OwnITerm: os.Getenv("ITERM_SESSION_ID"), IdleAfter: *idle, Usage: *showUsage, Dividers: *dividers}
+		opts := dash.Options{
+			Notify:      *notify,
+			OwnITerm:    os.Getenv("ITERM_SESSION_ID"),
+			OwnTmuxPane: os.Getenv("TMUX_PANE"),
+			Host:        host.Detect(os.Getenv, runtime.GOOS),
+			IdleAfter:   *idle,
+			Usage:       *showUsage,
+			Dividers:    *dividers,
+		}
 		var err error
 		if *once {
 			err = dash.Once(opts)
