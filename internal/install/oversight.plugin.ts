@@ -7,11 +7,17 @@ const OVERSIGHT = __OVERSIGHT__;
 export const OversightPlugin = async ({ directory }) => {
   // Sub-sessions (OpenCode's subagents) are ignored, like Claude's agent_id.
   const subSessions = new Set();
-  // Session id -> the SessionStart send, so later events wait for the file.
-  const started = new Map();
-  // User message ids already reported, and those whose text is still to come.
-  const userMessages = new Set();
-  const awaitingText = new Set();
+  // Sessions SessionStart has been queued for.
+  const started = new Set();
+  // Session id -> the tail of its send chain. Hooks for one session run one
+  // at a time, in event order, because each is a load-modify-save of the
+  // session file; different sessions may overlap. Handlers do not wait on
+  // the chain, so OpenCode is never held up by a hook.
+  const chains = new Map();
+  // User message id -> session id: messages already reported, and those
+  // whose text is still to come.
+  const userMessages = new Map();
+  const awaitingText = new Map();
 
   const send = (event, payload) => {
     try {
@@ -27,18 +33,32 @@ export const OversightPlugin = async ({ directory }) => {
     }
   };
 
+  const enqueue = (sid, event, payload) => {
+    const next = (chains.get(sid) ?? Promise.resolve()).then(() => send(event, payload));
+    chains.set(sid, next);
+    return next;
+  };
+
   const start = (sid) => {
-    const done = send("SessionStart", { session_id: sid, cwd: directory });
-    started.set(sid, done);
-    return done;
+    started.add(sid);
+    return enqueue(sid, "SessionStart", { session_id: sid, cwd: directory });
   };
 
   // Resumed sessions (opencode -c, --session, the picker) never fire
   // session.created, so the first event seen for a session starts it.
-  const sendFor = async (sid, event, payload) => {
+  const sendFor = (sid, event, payload) => {
     if (!sid || subSessions.has(sid)) return;
-    await (started.get(sid) ?? start(sid));
-    send(event, payload);
+    if (!started.has(sid)) start(sid);
+    return enqueue(sid, event, payload);
+  };
+
+  const forget = (sid) => {
+    subSessions.delete(sid);
+    started.delete(sid);
+    chains.delete(sid);
+    for (const map of [userMessages, awaitingText]) {
+      for (const [id, owner] of map) if (owner === sid) map.delete(id);
+    }
   };
 
   return {
@@ -58,43 +78,42 @@ export const OversightPlugin = async ({ directory }) => {
           // Re-published for the same message after the turn; report it once.
           if (info.role !== "user" || userMessages.has(info.id)) return;
           if (subSessions.has(info.sessionID)) return;
-          userMessages.add(info.id);
-          awaitingText.add(info.id);
+          userMessages.set(info.id, info.sessionID);
+          awaitingText.set(info.id, info.sessionID);
           // oversight keeps the previous prompt when this is empty; the text
           // follows in the message's first text part.
-          await sendFor(info.sessionID, "UserPromptSubmit", { session_id: info.sessionID, prompt: "" });
+          sendFor(info.sessionID, "UserPromptSubmit", { session_id: info.sessionID, prompt: "" });
           return;
         }
         case "message.part.updated": {
           const part = p.part ?? {};
           if (part.type !== "text" || part.synthetic || !awaitingText.has(part.messageID)) return;
           awaitingText.delete(part.messageID);
-          await sendFor(part.sessionID, "UserPromptSubmit", { session_id: part.sessionID, prompt: part.text ?? "" });
+          sendFor(part.sessionID, "UserPromptSubmit", { session_id: part.sessionID, prompt: part.text ?? "" });
           return;
         }
         case "permission.asked":
         case "question.asked": {
           const sid = p.sessionID ?? info.sessionID;
-          await sendFor(sid, "Notification", { session_id: sid, notification_type: "permission_prompt" });
+          sendFor(sid, "Notification", { session_id: sid, notification_type: "permission_prompt" });
           return;
         }
         case "permission.replied":
         case "question.replied":
         case "question.rejected": {
           const sid = p.sessionID ?? info.sessionID;
-          await sendFor(sid, "PostToolUse", { session_id: sid });
+          sendFor(sid, "PostToolUse", { session_id: sid });
           return;
         }
         case "session.idle": {
           const sid = p.sessionID ?? info.id;
-          await sendFor(sid, "Stop", { session_id: sid });
+          sendFor(sid, "Stop", { session_id: sid });
           return;
         }
         case "session.deleted": {
           const sid = info.id ?? p.sessionID;
-          subSessions.delete(sid);
-          started.delete(sid);
-          send("SessionEnd", { session_id: sid });
+          enqueue(sid, "SessionEnd", { session_id: sid });
+          forget(sid);
           return;
         }
       }

@@ -65,8 +65,8 @@ that config directory exists (`--opencode-dir DIR` to force a location,
 `--opencode=false` to skip). The plugin calls
 `oversight hook <Event> --agent opencode --pid N` on `session.created`,
 user `message.updated` and `message.part.updated`, `permission.asked`,
-`permission.replied`, `question.asked`, `question.replied`, `session.idle`
-and `session.deleted`. Sub-sessions are ignored. A resumed session
+`permission.replied`, `question.asked`, `question.replied`,
+`question.rejected`, `session.idle` and `session.deleted`. Sub-sessions are ignored. A resumed session
 (`opencode -c`, `--session`, the picker) fires no `session.created`, so the
 plugin starts it on the first event it sees for that session.
 
