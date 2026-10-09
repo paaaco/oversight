@@ -136,3 +136,82 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+func TestSessionStartRecordsTmuxPaneAndAgent(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	var spawned []string
+	env := testEnv(&spawned)
+	env.TmuxPane = "%12"
+	env.Agent = registry.AgentOpenCode
+	env.PID = 777
+	must(t, Handle("SessionStart", Input{SessionID: "oc1", CWD: "/x/api"}, env))
+	s, err := registry.LoadSession("oc1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TmuxPane != "%12" || s.ITermSessionID != "w0t3p0:UUID-A" || s.Agent != registry.AgentOpenCode || s.PID != 777 {
+		t.Fatalf("bad session: %+v", s)
+	}
+}
+
+func TestSessionStartDefaultsToClaudeAndAncestorPID(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	var spawned []string
+	env := testEnv(&spawned) // no Agent, no PID, ClaudePID returns 4242
+	must(t, Handle("SessionStart", Input{SessionID: "c1", CWD: "/x"}, env))
+	s, _ := registry.LoadSession("c1")
+	if s.Agent != registry.AgentClaude || s.PID != 4242 {
+		t.Fatalf("defaults wrong: %+v", s)
+	}
+}
+
+func TestSessionStartReplacesSameTmuxPane(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	var spawned []string
+	env := testEnv(&spawned)
+	env.ITermSessionID = "" // pure tmux on linux
+	env.TmuxPane = "%4"
+	must(t, Handle("SessionStart", Input{SessionID: "old", CWD: "/x"}, env))
+	env.Agent = registry.AgentOpenCode
+	must(t, Handle("SessionStart", Input{SessionID: "new", CWD: "/x"}, env))
+	list, _ := registry.ListSessions()
+	if len(list) != 1 || list[0].SessionID != "new" {
+		t.Fatalf("want only new, got %+v", list)
+	}
+}
+
+func TestOpenCodeStopDoesNotSpawnRecap(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	var spawned []string
+	env := testEnv(&spawned)
+	env.Agent = registry.AgentOpenCode
+	must(t, Handle("SessionStart", Input{SessionID: "oc1", CWD: "/x"}, env))
+	must(t, Handle("Stop", Input{SessionID: "oc1"}, env))
+	s, _ := registry.LoadSession("oc1")
+	if s.Status != registry.StatusWaiting {
+		t.Fatalf("stop should still mark waiting: %s", s.Status)
+	}
+	if len(spawned) != 0 {
+		t.Fatalf("opencode Stop spawned a recap: %v", spawned)
+	}
+}
+
+func TestRunParsesAgentAndPIDFlags(t *testing.T) {
+	cases := []struct {
+		args  []string
+		agent string
+		pid   int
+	}{
+		{nil, "", 0},
+		{[]string{"--agent", "opencode", "--pid", "123"}, "opencode", 123},
+		{[]string{"--agent=opencode", "--pid=9"}, "opencode", 9},
+		{[]string{"--pid", "not-a-number"}, "", 0},
+		{[]string{"--bogus"}, "", 0},
+	}
+	for _, c := range cases {
+		agent, pid := ParseArgs(c.args)
+		if agent != c.agent || pid != c.pid {
+			t.Errorf("ParseArgs(%v) = %q,%d want %q,%d", c.args, agent, pid, c.agent, c.pid)
+		}
+	}
+}

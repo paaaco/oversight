@@ -31,7 +31,7 @@ func main() {
 		if len(args) < 1 {
 			os.Exit(0) // never fail a hook, even a misconfigured one
 		}
-		os.Exit(hooks.Run(args[0], os.Stdin))
+		os.Exit(hooks.Run(args[0], args[1:], os.Stdin))
 	case "recap":
 		fs := flag.NewFlagSet("recap", flag.ContinueOnError)
 		force := fs.Bool("force", false, "regenerate even when the transcript barely changed")
@@ -111,6 +111,6 @@ func usage() {
   oversight                      run the dashboard
   oversight dash [--once] [--notify=false] [--usage=false] [--idle-after=30m] [--dividers=false]
   oversight install [--settings PATH] [--command CMD]
-  oversight hook <Event>         (called by Claude Code)
+  oversight hook <Event> [--agent NAME --pid N]   (called by Claude Code / the OpenCode plugin)
   oversight recap <session-id> [--force]`)
 }

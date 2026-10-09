@@ -63,3 +63,16 @@ func TestClean(t *testing.T) {
 		t.Fatalf("bad truncation: %q", got)
 	}
 }
+
+func TestGenerateSkipsOpenCodeSessions(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	_ = registry.SaveSession(&registry.Session{SessionID: "oc", Agent: registry.AgentOpenCode})
+	called := false
+	err := Generate("oc", true, func(context.Context, string, string) (string, error) {
+		called = true
+		return "nope", nil
+	})
+	if !errors.Is(err, errSkipped) || called {
+		t.Fatalf("want errSkipped without calling the summarizer, got %v called=%v", err, called)
+	}
+}

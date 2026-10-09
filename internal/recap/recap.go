@@ -59,6 +59,9 @@ func Generate(sessionID string, force bool, summarize Summarizer) error {
 		}
 		return fmt.Errorf("load session: %w", err)
 	}
+	if sess.AgentName() != registry.AgentClaude {
+		return errSkipped // no transcript to summarize for other agents
+	}
 	if sess.TranscriptPath == "" {
 		return errors.New("session has no transcript_path")
 	}

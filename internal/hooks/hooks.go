@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/exec"
@@ -42,6 +43,9 @@ type Input struct {
 // Env is what Handle needs from the environment, injectable for tests.
 type Env struct {
 	ITermSessionID string
+	TmuxPane       string
+	Agent          string // registry.AgentClaude when empty
+	PID            int    // 0 means ask ClaudePID
 	ClaudePID      func() int
 	Branch         func(cwd string) string
 	SpawnRecap     func(sessionID string)
@@ -53,6 +57,7 @@ type Env struct {
 func DefaultEnv() Env {
 	return Env{
 		ITermSessionID: os.Getenv("ITERM_SESSION_ID"),
+		TmuxPane:       os.Getenv("TMUX_PANE"),
 		ClaudePID:      procs.ClaudePID,
 		Branch:         GitBranch,
 		SpawnRecap:     func(id string) { SpawnRecap(id) },
@@ -61,8 +66,9 @@ func DefaultEnv() Env {
 	}
 }
 
-// Run is the CLI entry point. It always returns 0.
-func Run(event string, stdin io.Reader) int {
+// Run is the CLI entry point. args are the flags after the event name
+// (--agent NAME, --pid N), used by the OpenCode plugin. It always returns 0.
+func Run(event string, args []string, stdin io.Reader) int {
 	if os.Getenv(WorkerEnv) != "" {
 		return 0
 	}
@@ -76,10 +82,28 @@ func Run(event string, stdin io.Reader) int {
 		logx.Errorf("hook %s: bad json: %v", event, err)
 		return 0
 	}
-	if err := Handle(event, in, DefaultEnv()); err != nil {
+	env := DefaultEnv()
+	env.Agent, env.PID = ParseArgs(args)
+	if err := Handle(event, in, env); err != nil {
 		logx.Errorf("hook %s (%s): %v", event, in.SessionID, err)
 	}
 	return 0
+}
+
+// ParseArgs reads --agent and --pid. Anything unparseable yields the zero
+// value so a misbehaving caller still gets its event recorded.
+func ParseArgs(args []string) (agent string, pid int) {
+	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&agent, "agent", "", "")
+	fs.IntVar(&pid, "pid", 0, "")
+	if err := fs.Parse(args); err != nil {
+		return "", 0
+	}
+	if pid < 0 {
+		pid = 0
+	}
+	return agent, pid
 }
 
 const maxPrompt = 120
@@ -129,6 +153,7 @@ func Handle(event string, in Input, env Env) error {
 			return true
 		})
 	case "Stop":
+		agent := ""
 		err := update(in.SessionID, func(s *registry.Session) bool {
 			s.SetStatus(registry.StatusWaiting, now)
 			s.LastEvent = event
@@ -136,9 +161,10 @@ func Handle(event string, in Input, env Env) error {
 				s.TranscriptPath = in.TranscriptPath
 			}
 			refreshTitle(s, in, env)
+			agent = s.AgentName()
 			return true
 		})
-		if err == nil && env.SpawnRecap != nil {
+		if err == nil && env.SpawnRecap != nil && agent == registry.AgentClaude {
 			env.SpawnRecap(in.SessionID)
 		}
 		return err
@@ -171,7 +197,17 @@ func sessionStart(in Input, env Env, now time.Time) error {
 	if env.ITermSessionID != "" {
 		s.ITermSessionID = env.ITermSessionID
 	}
-	if env.ClaudePID != nil {
+	if env.TmuxPane != "" {
+		s.TmuxPane = env.TmuxPane
+	}
+	s.Agent = env.Agent
+	if s.Agent == "" {
+		s.Agent = registry.AgentClaude
+	}
+	switch {
+	case env.PID > 0:
+		s.PID = env.PID
+	case env.ClaudePID != nil:
 		s.PID = env.ClaudePID()
 	}
 	if env.Branch != nil {
