@@ -73,9 +73,12 @@ type Host interface {
 ### Session cleanup across restarts
 
 `DeleteOthersWithITerm` becomes `DeleteOthersWithPane(itermID, tmuxPane, keepID)`:
-a new session that shares either id with an existing one replaces it. This
-covers `/clear`, `--resume`, and quitting one agent and starting the other
-in the same pane.
+a new session that shares a tmux pane with an existing one replaces it. The
+iTerm id only counts as a pane identity when neither session has a tmux
+pane, because every pane of a tmux server inherits the one
+`ITERM_SESSION_ID` the server was started with. The same rule applies to
+hiding the dashboard's own pane. This covers `/clear`, `--resume`, and
+quitting one agent and starting the other in the same pane.
 
 ## Agents
 
@@ -171,7 +174,8 @@ README gets a Linux section: build, `install`, run inside a tmux pane,
   spaces or colons), `ErrMissing` when the pane is not in the listing,
   focus command sequence built from a pane id (exec is injected).
 - `hooks`: `--agent`/`--pid` flags set the fields; `TMUX_PANE` is recorded;
-  `DeleteOthersWithPane` replaces on either id; opencode `Stop` does not
+  `DeleteOthersWithPane` replaces on tmux pane, and on iTerm id only when
+  neither side has a tmux pane; opencode `Stop` does not
   spawn a recap.
 - `install`: plugin file written with the right path, rewritten only when
   the path changes, skipped with `--opencode=false`.
