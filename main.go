@@ -78,6 +78,8 @@ func main() {
 		fs := flag.NewFlagSet("install", flag.ExitOnError)
 		settings := fs.String("settings", "", "settings file (default ~/.claude/settings.json)")
 		command := fs.String("command", "", "hook command to register (default: this binary's absolute path)")
+		opencode := fs.Bool("opencode", true, "also write the OpenCode plugin when ~/.config/opencode exists")
+		opencodeDir := fs.String("opencode-dir", "", "OpenCode config dir to write the plugin into (forces --opencode)")
 		_ = fs.Parse(args)
 		path := *settings
 		if path == "" {
@@ -103,9 +105,35 @@ func main() {
 			os.Exit(1)
 		}
 		if changed {
-			fmt.Printf("hooks added to %s (backup written next to it)\n", path)
+			fmt.Printf("claude: hooks added to %s (backup written next to it)\n", path)
 		} else {
-			fmt.Printf("hooks already present in %s\n", path)
+			fmt.Printf("claude: hooks already present in %s\n", path)
+		}
+		if *opencode || *opencodeDir != "" {
+			dir := *opencodeDir
+			if dir == "" {
+				d, err := install.OpenCodeConfigDir()
+				if err == nil {
+					if _, statErr := os.Stat(d); statErr == nil {
+						dir = d
+					}
+				}
+			}
+			switch {
+			case dir == "":
+				fmt.Println("opencode: no ~/.config/opencode, plugin not written (use --opencode-dir to force)")
+			default:
+				changed, err := install.WritePlugin(dir, c)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "oversight:", err)
+					os.Exit(1)
+				}
+				if changed {
+					fmt.Printf("opencode: plugin written to %s\n", install.PluginPath(dir))
+				} else {
+					fmt.Printf("opencode: plugin up to date at %s\n", install.PluginPath(dir))
+				}
+			}
 		}
 	case "help", "-h", "--help":
 		usage()
@@ -120,7 +148,7 @@ func usage() {
 	fmt.Println(`usage:
   oversight                      run the dashboard
   oversight dash [--once] [--notify=false] [--usage=false] [--idle-after=30m] [--dividers=false]
-  oversight install [--settings PATH] [--command CMD]
+  oversight install [--settings PATH] [--command CMD] [--opencode=false] [--opencode-dir DIR]
   oversight hook <Event> [--agent NAME --pid N]   (called by Claude Code / the OpenCode plugin)
   oversight recap <session-id> [--force]`)
 }
