@@ -215,7 +215,9 @@ func ListSessions() ([]*Session, error) {
 }
 
 // DeleteOthersWithPane removes sessions sharing a terminal pane with the new
-// one, except keepID. Either id matches; empty ids match nothing. This covers
+// one, except keepID. A tmux pane id matches on its own; the iTerm id matches
+// only when neither side is in tmux, because every pane of a tmux server
+// inherits the same $ITERM_SESSION_ID. Empty ids match nothing. This covers
 // /clear and --resume in the same pane, and swapping one agent for another.
 func DeleteOthersWithPane(itermID, tmuxPane, keepID string) {
 	if itermID == "" && tmuxPane == "" {
@@ -229,7 +231,7 @@ func DeleteOthersWithPane(itermID, tmuxPane, keepID string) {
 		if s.SessionID == keepID {
 			continue
 		}
-		sameITerm := itermID != "" && s.ITermSessionID == itermID
+		sameITerm := tmuxPane == "" && s.TmuxPane == "" && itermID != "" && s.ITermSessionID == itermID
 		sameTmux := tmuxPane != "" && s.TmuxPane == tmuxPane
 		if sameITerm || sameTmux {
 			Delete(s.SessionID)

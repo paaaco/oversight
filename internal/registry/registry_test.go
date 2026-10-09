@@ -37,15 +37,30 @@ func TestDeleteOthersWithPane(t *testing.T) {
 	_ = SaveSession(&Session{SessionID: "old-iterm", ITermSessionID: "w0t1p0:X"})
 	_ = SaveSession(&Session{SessionID: "old-tmux", TmuxPane: "%12"})
 	_ = SaveSession(&Session{SessionID: "other", ITermSessionID: "w0t2p0:Y", TmuxPane: "%3"})
-	_ = SaveSession(&Session{SessionID: "new", ITermSessionID: "w0t1p0:X", TmuxPane: "%12"})
-	DeleteOthersWithPane("w0t1p0:X", "%12", "new")
+	_ = SaveSession(&Session{SessionID: "new-iterm", ITermSessionID: "w0t1p0:X"})
+	_ = SaveSession(&Session{SessionID: "new-tmux", ITermSessionID: "w0t2p0:Y", TmuxPane: "%12"})
+	DeleteOthersWithPane("w0t1p0:X", "", "new-iterm")
+	DeleteOthersWithPane("w0t2p0:Y", "%12", "new-tmux")
 	list, _ := ListSessions()
 	ids := map[string]bool{}
 	for _, s := range list {
 		ids[s.SessionID] = true
 	}
-	if ids["old-iterm"] || ids["old-tmux"] || !ids["new"] || !ids["other"] {
+	if ids["old-iterm"] || ids["old-tmux"] || !ids["new-iterm"] || !ids["new-tmux"] || !ids["other"] {
 		t.Fatalf("unexpected survivors: %v", ids)
+	}
+}
+
+// Every pane of a tmux server started from iTerm inherits the server's one
+// $ITERM_SESSION_ID, so inside tmux only the pane id identifies a pane.
+func TestDeleteOthersWithPaneSharedITermDifferentTmuxPanes(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	_ = SaveSession(&Session{SessionID: "left", ITermSessionID: "w0t1p0:X", TmuxPane: "%1"})
+	_ = SaveSession(&Session{SessionID: "right", ITermSessionID: "w0t1p0:X", TmuxPane: "%2"})
+	DeleteOthersWithPane("w0t1p0:X", "%2", "right")
+	list, _ := ListSessions()
+	if len(list) != 2 {
+		t.Fatalf("sibling tmux panes sharing an iTerm id must both survive, got %d sessions", len(list))
 	}
 }
 

@@ -244,7 +244,7 @@ func (m *model) reload() {
 	now := time.Now()
 	var rows []registry.Row
 	for _, s := range sessions {
-		if m.opts.OwnITerm != "" && s.ITermSessionID == m.opts.OwnITerm {
+		if m.ownITerm(s) {
 			continue
 		}
 		if m.opts.OwnTmuxPane != "" && s.TmuxPane == m.opts.OwnTmuxPane {
@@ -275,6 +275,16 @@ func (m *model) reload() {
 	registry.Sort(rows)
 	m.all = rows
 	m.applyFilter()
+}
+
+// ownITerm reports whether s runs in the dashboard's own iTerm session. Inside
+// tmux the iTerm id is shared by every pane of the server, so it only counts
+// when neither the dashboard nor the session is in tmux.
+func (m *model) ownITerm(s *registry.Session) bool {
+	if m.opts.OwnTmuxPane != "" || s.TmuxPane != "" {
+		return false
+	}
+	return m.opts.OwnITerm != "" && s.ITermSessionID == m.opts.OwnITerm
 }
 
 func (m *model) applyFilter() {

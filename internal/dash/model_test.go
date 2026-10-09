@@ -379,6 +379,27 @@ func seedTmux(t *testing.T, h host.Host) *model {
 	return m
 }
 
+// A tmux server started from iTerm hands its one $ITERM_SESSION_ID to every
+// pane, the dashboard's included. That shared id must not hide the rows.
+func TestSharedITermIDInsideTmuxShowsRows(t *testing.T) {
+	t.Setenv("OVERSIGHT_DIR", t.TempDir())
+	now := time.Now()
+	shared := "w0t1p0:SHARED"
+	_ = registry.SaveSession(&registry.Session{SessionID: "c", Repo: "api", ITermSessionID: shared, TmuxPane: "%12", PID: pidSelf(0), Status: registry.StatusWorking, StatusSince: now})
+	_ = registry.SaveSession(&registry.Session{SessionID: "o", Repo: "web", ITermSessionID: shared, TmuxPane: "%7", PID: pidSelf(0), Status: registry.StatusWaiting, StatusSince: now})
+	_ = registry.SaveSession(&registry.Session{SessionID: "self", Repo: "dash", ITermSessionID: shared, TmuxPane: "%0", PID: pidSelf(0), Status: registry.StatusWaiting, StatusSince: now})
+	m := newModel(Options{OwnITerm: shared, OwnTmuxPane: "%0", Host: &fakeHost{name: "tmux"}})
+	m.reload()
+	if len(m.rows) != 2 {
+		t.Fatalf("want the two other panes shown, got %d rows", len(m.rows))
+	}
+	for _, r := range m.rows {
+		if r.Session.SessionID == "self" {
+			t.Fatal("own tmux pane should still be hidden")
+		}
+	}
+}
+
 func TestTmuxHostLabelsAndAgentTags(t *testing.T) {
 	h := &fakeHost{name: "tmux", locs: map[string]host.Location{"%12": {Label: "dev:2.1"}, "%7": {Label: "dev:3.0"}}}
 	m := seedTmux(t, h)
