@@ -22,7 +22,7 @@ func TestWritePluginCreatesAndRepoints(t *testing.T) {
 	if !strings.Contains(src, `"/usr/local/bin/oversight"`) {
 		t.Fatalf("binary path not embedded:\n%s", src)
 	}
-	for _, ev := range []string{"session.created", "message.updated", "permission.asked", "permission.replied", "session.idle", "session.deleted"} {
+	for _, ev := range []string{"session.created", "message.updated", "message.part.updated", "permission.asked", "permission.replied", "question.asked", "question.replied", "session.idle", "session.deleted"} {
 		if !strings.Contains(src, ev) {
 			t.Fatalf("plugin does not handle %s", ev)
 		}

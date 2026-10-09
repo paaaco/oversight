@@ -20,15 +20,15 @@ iTerm tab or tmux pane.
  ↑↓ select   enter jump   / filter   n note   r recap   x drop   q quit
 ```
 
-Your workflow stays the same: one `claude` per tab, started by hand. The
-dashboard only watches.
+Your workflow stays the same: one `claude` or `opencode` per tab or pane,
+started by hand. The dashboard only watches.
 
 ## Install
 
 ```sh
 go build -o ~/.local/bin/oversight .
 oversight install       # adds hooks to ~/.claude/settings.json (backup kept)
-oversight               # run this in tab 1
+oversight               # run this in its own tab or tmux pane
 ```
 
 `install` registers the binary by absolute path, so rebuild in place or run
@@ -64,17 +64,22 @@ both ids, so the same session file works for either.
 that config directory exists (`--opencode-dir DIR` to force a location,
 `--opencode=false` to skip). The plugin calls
 `oversight hook <Event> --agent opencode --pid N` on `session.created`,
-user `message.updated`, `permission.asked`, `permission.replied`,
-`session.idle` and `session.deleted`. Sub-sessions are ignored.
+user `message.updated` and `message.part.updated`, `permission.asked`,
+`permission.replied`, `question.asked`, `question.replied`, `session.idle`
+and `session.deleted`. Sub-sessions are ignored. A resumed session
+(`opencode -c`, `--session`, the picker) fires no `session.created`, so the
+plugin starts it on the first event it sees for that session.
 
 OpenCode rows show the last prompt and your note. There is no recap, no
 `/rename` and no `/color` for them, because those come from the Claude Code
 transcript. `permission.asked` also fires for auto-approved permissions, so
 an OpenCode row can flash `approval` for a moment before `permission.replied`
-flips it back.
+flips it back. A question from the agent shows as `approval` too, until you
+answer it.
 
-The plugin fills `prompt` on `UserPromptSubmit` only when the event carries
-the text; on versions where it does not, the row keeps its previous prompt.
+The prompt line comes from the first text part of each user message. Each
+user message is reported once, so OpenCode re-publishing it after the turn
+does not flip a waiting row back to working.
 
 ## How it works
 
@@ -110,9 +115,9 @@ The line under the header is the same rate-limit view as `/usage` inside
 Claude Code: the 5-hour window, the 7-day window, and any per-model weekly
 window, each with a reset time. It comes from the OAuth login Claude Code
 keeps in the macOS Keychain (`Claude Code-credentials`); the first read
-triggers a Keychain "allow access" prompt for `oversight`. On Linux the same token is read from `~/.claude/.credentials.json`, with no
-prompt. The token is
-only held in memory and polled once a minute.
+triggers a Keychain "allow access" prompt for `oversight`. On Linux the same
+token is read from `~/.claude/.credentials.json`, with no prompt. The token
+is only held in memory and polled once a minute.
 
 The endpoint is internal to Claude Code and undocumented, so the line reads
 "usage unavailable" rather than breaking anything when it changes. Turn it
@@ -133,7 +138,7 @@ off with `--usage=false`.
 ## Flags
 
 - `dash --once` prints the list and exits.
-- `dash --notify=false` turns off the macOS notification on `approval`.
+- `dash --notify=false` turns off the desktop notification on `approval`.
 - `dash --usage=false` hides the subscription usage line.
 - `dash --idle-after 1h` changes the idle threshold.
 - `dash --dividers=false` removes the rule drawn between session rows.
@@ -153,8 +158,13 @@ by one turn.
 - Claude started outside both iTerm and tmux (VS Code terminal) is listed,
   but Enter says `not an iTerm session` or `not a tmux session`.
 - A session that starts in a pane another session already occupies (same
-  iTerm id or same tmux pane) replaces the older entry, so swapping Claude
-  for OpenCode in a pane does not leave a ghost row.
+  tmux pane, or same iTerm tab outside tmux) replaces the older entry, so
+  swapping Claude for OpenCode in a pane does not leave a ghost row. Every
+  pane of a tmux server shares one iTerm id, so inside tmux only the pane id
+  counts.
+- tmux reuses pane ids after a server restart. A dead session recorded
+  against a reused pane id labels and focuses the pane's new occupant until
+  the 10-minute stale sweep removes it, or until you drop it with `x`.
 - `/clear` and `--resume` mint a new session id; the older entry for the same
   pane is removed on `SessionStart`.
 - The transcript JSONL format is internal to Claude Code. The parser skips
